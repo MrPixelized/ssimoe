@@ -7,6 +7,15 @@ use futures_util::StreamExt;
 use actix_web::{App, HttpServer, Responder, HttpResponse};
 use actix_web::web::Data;
 
+use clap::Parser;
+
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Address to run the HTTP server on
+    address: String,
+}
+
 #[actix_web::get("/")]
 async fn stream(data: Data<watch::Receiver<Option<String>>>) -> impl Responder {
     // get the receiver from the Arc and turn it into an async stream
@@ -25,6 +34,9 @@ async fn stream(data: Data<watch::Receiver<Option<String>>>) -> impl Responder {
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    // parse arguments
+    let args = Args::parse();
+
     // create a channel, capable of handling multiple readers
     let (tx, rx) = watch::channel::<Option<String>>(Some(String::from("\n")));
 
@@ -40,13 +52,22 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-    // start the http server
-    HttpServer::new(move ||
+    println!("{}", args.address);
+
+    // setup the stream to the http server
+    let server = HttpServer::new(move ||
             App::new()
                 .app_data(Data::new(rx.clone()))
                 .service(stream)
-        )
-        .bind("localhost:8000")?
-        .run()
-        .await
+        );
+
+    // actually connect and run the web server, depending on the address
+    if args.address.starts_with("unix:") {
+        println!("{}", &args.address[5..]);
+        server.bind_uds(&args.address[5..])
+    } else {
+        server.bind(args.address)
+    }?
+    .run()
+    .await
 }
