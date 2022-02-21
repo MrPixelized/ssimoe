@@ -1,11 +1,12 @@
-use tokio::io::{self, BufReader, AsyncBufReadExt};
-use tokio::sync::watch::{channel, Receiver};
-use tokio_stream::wrappers::WatchStream as StreamWrapper;
+use std::sync::Arc;
 
-use futures_util::StreamExt;
+use tokio::io::{self, BufReader, AsyncBufReadExt};
+use tokio::sync::broadcast::{channel, Sender};
+use tokio_stream::wrappers::BroadcastStream as StreamWrapper;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use actix_web::{App, HttpServer, Responder, HttpResponse};
-use actix_web::web::Data;
+use actix_web::web::{Data, Bytes};
 
 use clap::Parser;
 
@@ -17,15 +18,15 @@ struct Args {
 }
 
 #[actix_web::get("/")]
-async fn stream(data: Data<Receiver<String>>) -> impl Responder {
+async fn stream(data: Data<Arc<Sender<Bytes>>>) -> impl Responder {
     // get the receiver from the Arc and turn it into an async stream
-    let rx = StreamWrapper::new((*data.into_inner()).clone());
+    let rx = StreamWrapper::new((*data.into_inner()).subscribe());
 
     // stream the data to the requester
     HttpResponse::Ok()
         .content_type("text/event_stream")
         .no_chunking(u64::MAX)
-        .streaming::<_, std::io::Error>(rx.map(|data| Ok(data.into())))
+        .streaming::<_, BroadcastStreamRecvError>(rx)
 }
 
 #[tokio::main]
@@ -34,24 +35,25 @@ async fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     // create a channel, capable of handling multiple readers
-    let (tx, rx) = channel::<String>(String::from("\n"));
+    let (sender, _) = channel::<Bytes>(16);
 
+    let tx = Arc::new(sender);
+    let tx_data = Arc::clone(&tx);
+
+    // start streaming stdin
     tokio::spawn(async move {
         let mut stdin = BufReader::new(io::stdin()).lines();
 
-        // continually read lines from standard input
         while let Some(mut block) = stdin.next_line().await.unwrap() {
             block = block + "\n";
-
-            // send the line into the receiver
-            tx.send(block).ok();
+            tx.send(block.into()).ok();
         }
     });
 
     // setup the stream to the http server
     let server = HttpServer::new(move ||
             App::new()
-                .app_data(Data::new(rx.clone()))
+                .app_data(Data::new(Arc::clone(&tx_data)))
                 .service(stream)
         );
 
