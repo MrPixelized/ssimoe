@@ -10,21 +10,31 @@ use actix_web::web::{Data, Bytes};
 
 use clap::Parser;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Address to run the HTTP server on
     address: String,
+
+    /// Content type
+    #[clap(short, long, default_value = "text/event_stream")]
+    content_type: String,
+}
+
+struct CommonData {
+    args: Arc<Args>,
+    sender: Arc<Sender<Bytes>>,
 }
 
 #[actix_web::get("/")]
-async fn stream(data: Data<Arc<Sender<Bytes>>>) -> impl Responder {
+async fn stream(data: Data<CommonData>) -> impl Responder {
     // get the receiver from the Arc and turn it into an async stream
-    let rx = StreamWrapper::new((*data.into_inner()).subscribe());
+    let rx = StreamWrapper::new(data.sender.subscribe());
 
     // stream the data to the requester
     HttpResponse::Ok()
-        .content_type("text/event_stream")
+        // use the stored content type
+        .content_type(data.args.content_type.clone())
         .no_chunking(u64::MAX)
         .streaming::<_, BroadcastStreamRecvError>(rx)
 }
@@ -33,12 +43,15 @@ async fn stream(data: Data<Arc<Sender<Bytes>>>) -> impl Responder {
 async fn main() -> std::io::Result<()> {
     // parse arguments
     let args = Args::parse();
+    let data_args = Arc::new(args.clone());
 
     // create a channel, capable of handling multiple readers
     let (sender, _) = channel::<Bytes>(16);
 
-    let tx = Arc::new(sender);
-    let tx_data = Arc::clone(&tx);
+    // make sure one end can be sent to connecting tasks, and one is kept here
+    // for writing
+    let sender = Arc::new(sender);
+    let data_sender = Arc::clone(&sender);
 
     // start streaming stdin
     tokio::spawn(async move {
@@ -46,14 +59,17 @@ async fn main() -> std::io::Result<()> {
 
         while let Some(mut block) = stdin.next_line().await.unwrap() {
             block = block + "\n";
-            tx.send(block.into()).ok();
+            sender.send(block.into()).ok();
         }
     });
 
     // setup the stream to the http server
     let server = HttpServer::new(move ||
             App::new()
-                .app_data(Data::new(Arc::clone(&tx_data)))
+                .app_data(Data::new(CommonData {
+                    args: Arc::clone(&data_args),
+                    sender: Arc::clone(&data_sender)
+                }))
                 .service(stream)
         );
 
