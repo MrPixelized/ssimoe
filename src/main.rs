@@ -48,13 +48,17 @@ async fn main() -> io::Result<()> {
     // start receiving and handling requests
     let listener = TcpListener::bind(args.address.clone()).await?;
 
-    while let Ok((connection, _)) = listener.accept().await {
+    loop {
+        // listen for an incoming request
+        let (connection, _) = match listener.accept().await {
+            Ok(x) => x,
+            Err(_) => continue,
+        };
+
         // setup a new receiving channel
         let stream = StreamWrapper::new(sender.subscribe());
 
         // spawn a new task to forward it to the incoming connection
         tokio::spawn(handle_incoming(connection, stream, Arc::clone(&args)));
     }
-
-    Ok(())
 }
