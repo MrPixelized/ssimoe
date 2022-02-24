@@ -13,6 +13,10 @@ use clap::Parser;
 struct Args {
     /// Address to run the HTTP server on
     address: String,
+
+    /// String that delimits buffered blocks of standard input
+    #[clap(long, short)]
+    block_delimiter: Option<String>,
 }
 
 async fn handle_incoming(mut connection: TcpStream,
@@ -25,12 +29,26 @@ async fn handle_incoming(mut connection: TcpStream,
     Err(std::io::ErrorKind::BrokenPipe.into())
 }
 
-async fn stream_stdin_to(sender: Sender<String>) {
+async fn stream_stdin_to(sender: Sender<String>, args: Arc<Args>) {
     let mut stdin = BufReader::new(io::stdin()).lines();
+    let delim = args.block_delimiter.clone();
 
-    while let Some(mut block) = stdin.next_line().await.unwrap() {
-        block = block + "\n";
-        sender.send(block.into()).ok();
+    let mut block = String::new();
+
+    while let Some(ref line) = stdin.next_line().await.unwrap() {
+        // If there is no delimiter or it has not been reached,
+        // add this line to the block
+        if delim != Some(line.to_string()) {
+            block += line.as_ref();
+            block += "\n";
+        }
+
+        // If there is no delimiter or this line is the delimter,
+        // send the block onward and clear it
+        if delim.is_none() || Some(line.to_string()) == delim {
+            sender.send(block.clone()).ok();
+            block.clear();
+        }
     }
 }
 
@@ -43,10 +61,10 @@ async fn main() -> io::Result<()> {
     let (sender, _) = channel::<String>(16);
 
     // spawn a task to stream stdin to this channel
-    tokio::spawn(stream_stdin_to(sender.clone()));
+    tokio::spawn(stream_stdin_to(sender.clone(), Arc::clone(&args)));
 
     // start receiving and handling requests
-    let listener = TcpListener::bind(args.address.clone()).await?;
+    let listener = TcpListener::bind(&args.address).await?;
 
     loop {
         // listen for an incoming request
