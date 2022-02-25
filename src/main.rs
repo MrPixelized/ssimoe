@@ -22,6 +22,9 @@ struct Args {
     /// How many blocks of buffered input to send
     #[clap(long, short, default_value_t=0)]
     buffered_blocks: usize,
+
+    #[clap(long, short, multiple_occurrences(true))]
+    header: Vec<String>,
 }
 
 async fn handle_incoming(mut connection: TcpStream,
@@ -45,8 +48,22 @@ async fn handle_incoming(mut connection: TcpStream,
     let mut stdin = buffered_blocks.chain(stdin);
 
     // write OK status for HTTP protocol
-    connection.write_all("HTTP/1.1 200 OK\n".as_bytes()).await?;
-    connection.write_all("\n".as_bytes()).await?;
+    connection.write_all(b"HTTP/1.1 200 OK\n").await?;
+    // if no headers are specified, stick to these defaults
+    if args.header.len() == 0 {
+        connection.write_all(b"Cache-Control: no-store\n").await?;
+        connection.write_all(b"Content-Type: text/event-stream\n").await?;
+        connection.write_all(b"Connection: keep-alive\n").await?;
+    }
+
+    // write user-specified headers
+    for header in &args.header {
+        connection.write_all(header.as_bytes()).await?;
+        connection.write_all(b"\n").await?;
+    }
+
+    // write newline separating headers and body
+    connection.write_all(b"\n").await?;
 
     // iterate over the items of standard input and write them to the client
     while let Some(Ok(block)) = stdin.next().await {
@@ -71,7 +88,6 @@ async fn stream_stdin_to(sender: Sender<String>,
             block += line.as_ref();
             block += "\n";
         }
-
 
         // If there is no delimiter or this line is the delimter,
         // send the block onward and clear it
