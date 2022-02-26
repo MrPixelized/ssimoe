@@ -53,7 +53,7 @@ async fn handle_incoming(mut connection: TcpStream,
     let mut stdin = buffered_blocks.chain(stdin);
 
     // write OK status for HTTP protocol
-    connection.write_all(b"HTTP/1.1 200 OK\n").await?;
+    connection.write_all(b"HTTP/1.0 200 OK\n").await?;
     // if no headers are specified, stick to these defaults
     if args.header.len() == 0 {
         connection.write_all(b"Cache-Control: no-store\n").await?;
