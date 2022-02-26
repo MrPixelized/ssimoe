@@ -23,8 +23,13 @@ struct Args {
     #[clap(long, short, default_value_t=0)]
     buffered_blocks: usize,
 
+    /// Header to send with every request, defaults to SSE headers
     #[clap(long, short, multiple_occurrences(true))]
     header: Vec<String>,
+
+    /// The maximum amount of blocks to send in total
+    #[clap(long, short)]
+    max_blocks: Option<usize>,
 }
 
 async fn handle_incoming(mut connection: TcpStream,
@@ -66,11 +71,21 @@ async fn handle_incoming(mut connection: TcpStream,
     connection.write_all(b"\n").await?;
 
     // iterate over the items of standard input and write them to the client
-    while let Some(Ok(block)) = stdin.next().await {
-        connection.write_all(block.as_bytes()).await?;
+    let max_blocks = match args.max_blocks {
+        Some(m) => m,
+        None => usize::MAX,
+    };
+
+    for _ in 0..max_blocks {
+        if let Some(Ok(block)) = stdin.next().await {
+            connection.write_all(block.as_bytes()).await?;
+        } else {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
     }
 
-    Err(std::io::ErrorKind::BrokenPipe.into())
+    connection.write_all(b"\n").await?;
+    Ok(())
 }
 
 async fn stream_stdin_to(sender: Sender<String>,
