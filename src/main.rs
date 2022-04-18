@@ -70,15 +70,27 @@ async fn handle_incoming(mut connection: TcpStream,
     // write newline separating headers and body
     connection.write_all(b"\n").await?;
 
-    // loop through the stdin blocks until they run out
-    while let Some(ln) = stdin.next().await {
-        match ln {
-            Ok(block) => connection.write_all(block.as_bytes()).await?,
-            Err(_) => return Err(std::io::ErrorKind::BrokenPipe.into()),
+    if let Some(max_blocks) = args.max_blocks {
+        for _ in 0..max_blocks {
+            if let Some(Ok(block)) = stdin.next().await {
+                connection.write_all(block.as_bytes()).await?;
+            } else {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
+        }
+    } else {
+        loop {
+            if let Some(Ok(block)) = stdin.next().await {
+                connection.write_all(block.as_bytes()).await?;
+            } else {
+                return Err(std::io::ErrorKind::BrokenPipe.into());
+            }
         }
     }
 
     connection.write_all(b"\n").await?;
+    connection.shutdown().await?;
+
     Ok(())
 }
 
